@@ -13,12 +13,22 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Fix folder structure
+      - name: Auto-fix all nested folders
         run: |
-          if [ -d "app/app/src" ]; then
-            mkdir -p app/src
-            cp -rf app/app/src/* app/src/
-          fi
+          mkdir -p /tmp/fixed_src/main/res/layout
+          mkdir -p /tmp/fixed_src/main/java/com/example/subtitletranslator
+
+          MANIFEST=$(find app -name "AndroidManifest.xml" | head -n 1)
+          LAYOUT=$(find app -name "activity_main.xml" | head -n 1)
+          MAIN_KT=$(find app -name "MainActivity.kt" | head -n 1)
+
+          cp "$MANIFEST" /tmp/fixed_src/main/AndroidManifest.xml
+          cp "$LAYOUT" /tmp/fixed_src/main/res/layout/activity_main.xml
+          cp "$MAIN_KT" /tmp/fixed_src/main/java/com/example/subtitletranslator/MainActivity.kt
+
+          rm -rf app/src
+          mkdir -p app/src
+          cp -r /tmp/fixed_src/* app/src/
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
