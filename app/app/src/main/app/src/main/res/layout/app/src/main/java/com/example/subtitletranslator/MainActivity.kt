@@ -5,7 +5,6 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.widget.TextView
-import android.widget.Toast
 import androidx.annotation.OptIn
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
@@ -24,6 +23,7 @@ import com.google.mlkit.nl.translate.Translator
 import com.google.mlkit.nl.translate.TranslatorOptions
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.util.Locale
 import java.util.concurrent.Executors
@@ -32,10 +32,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private lateinit var previewView: PreviewView
     private lateinit var tvSubtitle: TextView
-    private lateinit var tts: TextToSpeech
-    private lateinit var translator: Translator
+    private var tts: TextToSpeech? = null
+    private var translator: Translator? = null
+    private var recognizer: TextRecognizer? = null
 
-    private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
     private val cameraExecutor = Executors.newSingleThreadExecutor()
 
     private var isTranslatorReady = false
@@ -49,61 +49,68 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         previewView = findViewById(R.id.previewView)
         tvSubtitle = findViewById(R.id.tvSubtitle)
 
-        tts = TextToSpeech(this, this)
+        try {
+            tts = TextToSpeech(this, this)
+            recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 
-        val options = TranslatorOptions.Builder()
-            .setSourceLanguage(TranslateLanguage.ENGLISH)
-            .setTargetLanguage(TranslateLanguage.THAI)
-            .build()
-        translator = Translation.getClient(options)
+            val options = TranslatorOptions.Builder()
+                .setSourceLanguage(TranslateLanguage.ENGLISH)
+                .setTargetLanguage(TranslateLanguage.THAI)
+                .build()
+            translator = Translation.getClient(options)
 
-        tvSubtitle.text = "กำลังดาวน์โหลดไฟล์ภาษาไทย..."
-        val conditions = DownloadConditions.Builder().build()
-        translator.downloadModelIfNeeded(conditions)
-            .addOnSuccessListener {
-                isTranslatorReady = true
-                tvSubtitle.text = "พร้อมแปล! ส่องกล้องไปที่ซับไตเติ้ลได้เลย"
+            tvSubtitle.text = "กำลังดาวน์โหลดไฟล์ภาษาไทย..."
+            val conditions = DownloadConditions.Builder().build()
+            translator?.downloadModelIfNeeded(conditions)
+                ?.addOnSuccessListener {
+                    isTranslatorReady = true
+                    tvSubtitle.text = "พร้อมแปล! ส่องกล้องไปที่ซับไตเติ้ลได้เลย"
+                }
+                ?.addOnFailureListener { e ->
+                    tvSubtitle.text = "โหลดภาษาไม่สำเร็จ: ${e.message}"
+                }
+
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                startCamera()
+            } else {
+                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 101)
             }
-            .addOnFailureListener {
-                tvSubtitle.text = "โหลดภาษาไม่สำเร็จ กรุณาเชื่อมต่ออินเทอร์เน็ต"
-            }
-
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-            startCamera()
-        } else {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 101)
+        } catch (e: Exception) {
+            tvSubtitle.text = "เกิดข้อผิดพลาด: ${e.message}"
         }
     }
 
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
-            tts.language = Locale("th", "TH")
-            tts.setSpeechRate(1.15f)
+            tts?.language = Locale("th", "TH")
+            tts?.setSpeechRate(1.15f)
         }
     }
 
     private fun startCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
-            val cameraProvider = cameraProviderFuture.get()
-            val preview = Preview.Builder().build().also {
-                it.setSurfaceProvider(previewView.surfaceProvider)
-            }
-
-            val imageAnalyzer = ImageAnalysis.Builder()
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .build()
-                .also {
-                    it.setAnalyzer(cameraExecutor) { imageProxy ->
-                        processImageProxy(imageProxy)
-                    }
+            try {
+                val cameraProvider = cameraProviderFuture.get()
+                val preview = Preview.Builder().build().also {
+                    it.setSurfaceProvider(previewView.surfaceProvider)
                 }
 
-            try {
+                val imageAnalyzer = ImageAnalysis.Builder()
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .build()
+                    .also {
+                        it.setAnalyzer(cameraExecutor) { imageProxy ->
+                            processImageProxy(imageProxy)
+                        }
+                    }
+
                 cameraProvider.unbindAll()
                 cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageAnalyzer)
             } catch (e: Exception) {
-                Toast.makeText(this, "เปิดกล้องไม่สำเร็จ", Toast.LENGTH_SHORT).show()
+                runOnUiThread {
+                    tvSubtitle.text = "เปิดกล้องไม่สำเร็จ: ${e.message}"
+                }
             }
         }, ContextCompat.getMainExecutor(this))
     }
@@ -125,8 +132,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
         val imageHeight = image.height
 
-        recognizer.process(image)
-            .addOnSuccessListener { visionText ->
+        recognizer?.process(image)
+            ?.addOnSuccessListener { visionText ->
                 val subtitleText = visionText.textBlocks
                     .filter { block ->
                         val top = block.boundingBox?.top ?: 0
@@ -141,18 +148,18 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     translateAndSpeak(subtitleText)
                 }
             }
-            .addOnCompleteListener {
+            ?.addOnCompleteListener {
                 imageProxy.close()
-            }
+            } ?: imageProxy.close()
     }
 
     private fun translateAndSpeak(englishText: String) {
-        translator.translate(englishText)
-            .addOnSuccessListener { thaiText ->
+        translator?.translate(englishText)
+            ?.addOnSuccessListener { thaiText ->
                 runOnUiThread {
                     tvSubtitle.text = thaiText
                 }
-                tts.speak(thaiText, TextToSpeech.QUEUE_FLUSH, null, null)
+                tts?.speak(thaiText, TextToSpeech.QUEUE_FLUSH, null, null)
             }
     }
 
@@ -169,14 +176,17 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == 101 && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
             startCamera()
+        } else {
+            tvSubtitle.text = "กรุณาอนุญาตสิทธิ์กล้องเพื่อใช้งาน"
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         cameraExecutor.shutdown()
-        tts.stop()
-        tts.shutdown()
-        translator.close()
+        tts?.stop()
+        tts?.shutdown()
+        translator?.close()
     }
 }
+
